@@ -1,5 +1,4 @@
-const hre = require('hardhat');
-const ethers = hre.ethers;
+const { ethers } = require('hardhat');
 
 async function main() {
     const [signer] = await ethers.getSigners();
