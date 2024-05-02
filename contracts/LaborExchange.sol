@@ -10,8 +10,8 @@ contract LaborExchange {
         Started,
         Finished,
         PendingEmployerAnswer,
-        PendingModeratorAnswer,
-        Disputed
+        PendingWorkerAnswer,
+        PendingModeratorAnswer
     }
 
     struct Task {
@@ -21,6 +21,11 @@ contract LaborExchange {
         address worker;
         TaskStatus status;
         Dispute dispute;
+    }
+
+    struct TaskResult {
+        uint256 id;
+        Task task;
     }
 
     struct Dispute {
@@ -89,49 +94,123 @@ contract LaborExchange {
         emit TaskCreated(taskCount, _description, _price, msg.sender);
     }
 
-    //all
-    function getPendingTasks() public view returns (Task[] memory) {
-        uint256 count = 0;
+    function isModerator() public view returns (bool) {
+        if (moderator == msg.sender) {
+            return true;
+        }
+        return false;
+    }
 
+    function isOwner() public view returns (bool) {
+        if (owner == msg.sender) {
+            return true;
+        }
+        return false;
+    }
+
+    //all
+    function getPendingTasks() public view returns (TaskResult[] memory) {
+        uint256 count = 0;
         for (uint256 i = 1; i <= taskCount; i++) {
             if (tasks[i].status == TaskStatus.Pending) {
                 count++;
             }
         }
-
-        Task[] memory pendingTasks = new Task[](count);
+        TaskResult[] memory pendingTasks = new TaskResult[](count);
         uint256 index = 0;
-
         for (uint256 i = 1; i <= taskCount; i++) {
             if (tasks[i].status == TaskStatus.Pending) {
-                pendingTasks[index] = tasks[i];
+                TaskResult memory taskResult;
+                taskResult.task = tasks[i];
+                taskResult.id = i;
+                pendingTasks[index] = taskResult;
                 index++;
             }
         }
-
         return pendingTasks;
     }
 
     //all
-    function getUserTasks() public view returns (Task[] memory) {
+    function getUserCreatedTasks() public view returns (TaskResult[] memory) {
         uint256 count = 0;
-
         for (uint256 i = 1; i <= taskCount; i++) {
             if (tasks[i].employer == msg.sender) {
                 count++;
             }
         }
-
-        Task[] memory userTasks = new Task[](count);
+        TaskResult[] memory userTasks = new TaskResult[](count);
         uint256 index = 0;
-
         for (uint256 i = 1; i <= taskCount; i++) {
             if (tasks[i].employer == msg.sender) {
-                userTasks[index] = tasks[i];
+                TaskResult memory taskResult;
+                taskResult.task = tasks[i];
+                taskResult.id = i;
+                userTasks[index] = taskResult;
                 index++;
             }
         }
 
+        return userTasks;
+    }
+
+    //all
+    function getUserDoingTasks() public view returns (TaskResult[] memory) {
+        uint256 count = 0;
+
+        for (uint256 i = 1; i <= taskCount; i++) {
+            if (
+                tasks[i].worker == msg.sender &&
+                tasks[i].status != TaskStatus.Finished &&
+                tasks[i].status != TaskStatus.Pending
+            ) {
+                count++;
+            }
+        }
+
+        TaskResult[] memory userTasks = new TaskResult[](count);
+        uint256 index = 0;
+
+        for (uint256 i = 1; i <= taskCount; i++) {
+            if (
+                tasks[i].worker == msg.sender &&
+                tasks[i].status != TaskStatus.Finished &&
+                tasks[i].status != TaskStatus.Pending
+            ) {
+                TaskResult memory taskResult;
+                taskResult.task = tasks[i];
+                taskResult.id = i;
+                userTasks[index] = taskResult;
+                index++;
+            }
+        }
+
+        return userTasks;
+    }
+
+    function getModeratorTasks()
+        public
+        view
+        onlyModerator
+        returns (TaskResult[] memory)
+    {
+        uint256 count = 0;
+
+        for (uint256 i = 1; i <= taskCount; i++) {
+            if (tasks[i].status == TaskStatus.PendingModeratorAnswer) {
+                count++;
+            }
+        }
+        TaskResult[] memory userTasks = new TaskResult[](count);
+        uint256 index = 0;
+        for (uint256 i = 1; i <= taskCount; i++) {
+            if (tasks[i].status == TaskStatus.PendingModeratorAnswer) {
+                TaskResult memory taskResult;
+                taskResult.task = tasks[i];
+                taskResult.id = i;
+                userTasks[index] = taskResult;
+                index++;
+            }
+        }
         return userTasks;
     }
 
@@ -158,7 +237,7 @@ contract LaborExchange {
             address payable workerAddress = payable(tasks[_taskId].worker);
             workerAddress.transfer(tasks[_taskId].price);
         } else {
-            tasks[_taskId].status = TaskStatus.Started;
+            tasks[_taskId].status = TaskStatus.PendingWorkerAnswer;
             if (bytes(_msg).length > 0) {
                 tasks[_taskId].dispute.employerMsg = _msg;
             }
@@ -168,13 +247,17 @@ contract LaborExchange {
     }
 
     //worker
-    function workerDecision(uint256 _taskId, bool _accept) public {
+    function workerDecision(
+        uint256 _taskId,
+        bool _accept,
+        string memory _msg
+    ) public {
         require(
             tasks[_taskId].worker == msg.sender,
             "Only assigned worker can make a decision"
         );
         require(
-            tasks[_taskId].status == TaskStatus.Disputed,
+            tasks[_taskId].status == TaskStatus.PendingWorkerAnswer,
             "Task not in dispute"
         );
 
@@ -183,6 +266,7 @@ contract LaborExchange {
             tasks[_taskId].dispute = Dispute(address(0), "", "", "");
         } else {
             tasks[_taskId].status = TaskStatus.PendingModeratorAnswer;
+            tasks[_taskId].dispute.workerMsg = _msg;
         }
 
         emit DisputeResolved(_taskId, "Worker's decision");
@@ -196,19 +280,13 @@ contract LaborExchange {
         uint256 _workerShare
     ) public onlyModerator {
         require(
-            tasks[_taskId].status == TaskStatus.Disputed,
+            tasks[_taskId].status == TaskStatus.PendingModeratorAnswer,
             "Task not in dispute"
         );
 
         tasks[_taskId].dispute.decree = _decree;
 
-        if (_winner == tasks[_taskId].employer) {
-            address payable employerAddress = payable(tasks[_taskId].employer);
-            employerAddress.transfer(tasks[_taskId].price);
-        } else if (_winner == tasks[_taskId].worker) {
-            address payable workerAddress = payable(tasks[_taskId].worker);
-            workerAddress.transfer(tasks[_taskId].price);
-        } else {
+        if (_workerShare > 0) {
             address payable employerAddress = payable(tasks[_taskId].employer);
             address payable workerAddress = payable(tasks[_taskId].worker);
             uint256 totalAmount = tasks[_taskId].price;
@@ -217,7 +295,14 @@ contract LaborExchange {
 
             employerAddress.transfer(employerAmount);
             workerAddress.transfer(workerAmount);
+        } else if (_winner == tasks[_taskId].worker) {
+            address payable workerAddress = payable(tasks[_taskId].worker);
+            workerAddress.transfer(tasks[_taskId].price);
+        } else if (_winner == tasks[_taskId].employer) {
+            address payable employerAddress = payable(tasks[_taskId].employer);
+            employerAddress.transfer(tasks[_taskId].price);
         }
+        tasks[_taskId].status = TaskStatus.Finished;
 
         emit DisputeResolved(_taskId, _decree);
     }
@@ -230,7 +315,7 @@ contract LaborExchange {
         );
         require(tasks[_taskId].worker == address(0), "Task already taken");
         require(
-            tasks[_taskId].employer == msg.sender,
+            tasks[_taskId].employer != msg.sender,
             "You can not take your task"
         );
         tasks[_taskId].worker = msg.sender;
